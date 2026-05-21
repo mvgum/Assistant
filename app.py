@@ -7,9 +7,9 @@
 import os
 import tempfile
 import subprocess
-import shutil
 import streamlit as st
 import whisper
+import imageio_ffmpeg
 
 
 # ===== Настройки страницы =====
@@ -20,10 +20,8 @@ st.set_page_config(
 )
 
 
-# ===== Вспомогательные функции =====
-def check_ffmpeg() -> bool:
-    """Проверяет, установлен ли ffmpeg."""
-    return shutil.which("ffmpeg") is not None
+# ===== Путь к ffmpeg из imageio-ffmpeg =====
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
 
 @st.cache_resource(show_spinner=False)
@@ -35,7 +33,7 @@ def load_whisper_model(model_size: str):
 def extract_audio(video_path: str, audio_path: str) -> None:
     """Извлекает аудио из видео в формате wav (16kHz, mono)."""
     command = [
-        "ffmpeg",
+        FFMPEG_PATH,
         "-i", video_path,
         "-vn",
         "-acodec", "pcm_s16le",
@@ -78,16 +76,6 @@ def segments_to_srt(segments) -> str:
 st.title("🎬 Видео → Текст")
 st.caption("Распознавание речи с помощью OpenAI Whisper")
 
-# Проверка ffmpeg
-if not check_ffmpeg():
-    st.error(
-        "❌ **ffmpeg не найден.** Установите его:\n"
-        "- Windows: https://ffmpeg.org/download.html (и добавьте в PATH)\n"
-        "- macOS: `brew install ffmpeg`\n"
-        "- Linux: `sudo apt-get install ffmpeg`"
-    )
-    st.stop()
-
 # Боковая панель с настройками
 with st.sidebar:
     st.header("⚙️ Настройки")
@@ -95,8 +83,8 @@ with st.sidebar:
     model_size = st.selectbox(
         "Модель Whisper",
         options=["tiny", "base", "small", "medium", "large"],
-        index=1,
-        help="Чем больше — тем точнее, но медленнее. Для русского рекомендуется medium/large."
+        index=0,  # tiny по умолчанию (для Render Free)
+        help="Чем больше — тем точнее, но медленнее. На бесплатном Render используйте tiny."
     )
 
     language = st.selectbox(
@@ -120,43 +108,34 @@ with st.sidebar:
 uploaded_file = st.file_uploader(
     "Загрузите видео или аудио",
     type=["mp4", "mov", "avi", "mkv", "webm", "mp3", "wav", "m4a", "ogg", "flac"],
-    help="Поддерживаются видео и аудио форматы"
 )
 
 if uploaded_file is not None:
     st.success(f"✅ Файл загружен: **{uploaded_file.name}** "
                f"({uploaded_file.size / 1024 / 1024:.2f} MB)")
 
-    # Предпросмотр
     file_ext = uploaded_file.name.split(".")[-1].lower()
     if file_ext in ["mp4", "mov", "webm"]:
         st.video(uploaded_file)
     elif file_ext in ["mp3", "wav", "m4a", "ogg", "flac"]:
         st.audio(uploaded_file)
 
-    # Кнопка запуска
     if st.button("🚀 Распознать речь", type="primary", use_container_width=True):
-
-        # Создаём временные файлы
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = os.path.join(tmpdir, uploaded_file.name)
             audio_path = os.path.join(tmpdir, "audio.wav")
 
-            # Сохраняем загруженный файл
             with open(input_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
             try:
-                # 1. Извлечение аудио
                 with st.spinner("🎵 Извлекаем аудио..."):
                     extract_audio(input_path, audio_path)
 
-                # 2. Загрузка модели
-                with st.spinner(f"📥 Загружаем модель '{model_size}' (первый раз — дольше)..."):
+                with st.spinner(f"📥 Загружаем модель '{model_size}'..."):
                     model = load_whisper_model(model_size)
 
-                # 3. Транскрипция
-                with st.spinner("🗣️ Распознаём речь... Это может занять время."):
+                with st.spinner("🗣️ Распознаём речь..."):
                     lang = None if language == "auto" else language
                     result = model.transcribe(audio_path, language=lang, verbose=False)
 
@@ -166,12 +145,10 @@ if uploaded_file is not None:
 
                 st.success("✅ Готово!")
 
-                # Информация
                 col1, col2 = st.columns(2)
                 col1.metric("Язык", detected_lang)
                 col2.metric("Сегментов", len(segments))
 
-                # Результат
                 tab1, tab2, tab3 = st.tabs(["📝 Текст", "⏱️ С тайм-кодами", "🎬 Субтитры (SRT)"])
 
                 with tab1:
@@ -197,8 +174,6 @@ if uploaded_file is not None:
                             file_name="transcription_timed.txt",
                             mime="text/plain",
                         )
-                    else:
-                        st.info("Сегменты недоступны.")
 
                 with tab3:
                     if segments:
@@ -210,8 +185,6 @@ if uploaded_file is not None:
                             file_name="subtitles.srt",
                             mime="text/plain",
                         )
-                    else:
-                        st.info("Сегменты недоступны.")
 
             except subprocess.CalledProcessError as e:
                 st.error(f"❌ Ошибка ffmpeg: {e}")
@@ -221,7 +194,5 @@ if uploaded_file is not None:
 else:
     st.info("👆 Загрузите видео или аудио файл, чтобы начать.")
 
-# Футер
 st.markdown("---")
-st.caption("Powered by [OpenAI Whisper](https://github.com/openai/whisper) · "
-           "Сделано с ❤️ на Streamlit")
+st.caption("Powered by [OpenAI Whisper](https://github.com/openai/whisper) · Streamlit")
